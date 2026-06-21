@@ -43,6 +43,7 @@ apps/
 docs/         Architecture decision records
 infra/        Docker Compose and environment examples
 packages/     Reserved for future shared packages
+scripts/      Windows and Linux helper scripts
 ```
 
 `README.md` is the canonical project document. `docs/decisions` keeps architecture
@@ -158,6 +159,56 @@ QDRANT_TRUST_ENV=false
 `QDRANT_TRUST_ENV=false` is important on Windows/Docker Desktop when local proxy or
 relay settings cause Python HTTP clients to see `503` while browser/curl checks still
 work.
+
+## Helper Scripts
+
+Windows scripts live in `scripts/*.bat` and are intended for local development from
+Command Prompt, PowerShell or Explorer:
+
+```powershell
+scripts\setup-dev.bat
+scripts\start-project.bat
+```
+
+Useful Windows entry points:
+
+- `scripts\setup-api-venv.bat` - create `apps/api/.venv` and install backend
+  development dependencies.
+- `scripts\setup-web.bat` - install frontend dependencies.
+- `scripts\setup-dev.bat` - run both setup steps.
+- `scripts\start-infra.bat` - start PostgreSQL and Qdrant through Docker Compose.
+- `scripts\start-api.bat` - run the FastAPI backend with reload.
+- `scripts\start-web.bat` - run the Vite frontend dev server.
+- `scripts\start-project.bat` - start infrastructure, API and frontend in separate
+  Windows terminals.
+- `scripts\check-project.bat` - run backend and frontend validation checks.
+
+Linux server scripts live in `scripts/*.sh`. On a fresh server, install Python 3.11+,
+Node.js 20+ and Docker first, then run:
+
+```bash
+chmod +x scripts/*.sh
+scripts/setup-server.sh
+cp infra/.env.example .env
+# edit .env for the server environment
+scripts/start-server.sh
+```
+
+Useful server entry points:
+
+- `scripts/setup-api-venv.sh` - create `apps/api/.venv` and install backend
+  development dependencies.
+- `scripts/setup-web.sh` - install frontend dependencies.
+- `scripts/setup-server.sh` - prepare backend and frontend runtime dependencies.
+- `scripts/start-infra.sh` - start PostgreSQL and Qdrant through Docker Compose.
+- `scripts/start-api.sh` - run the FastAPI backend.
+- `scripts/start-web.sh` - build the frontend and run Vite preview.
+- `scripts/start-server.sh` - start infrastructure, API and frontend in the background.
+- `scripts/stop-server.sh` - stop background API and frontend processes started by
+  `start-server.sh`.
+- `scripts/check-project.sh` - run backend and frontend validation checks.
+
+Server logs and PID files are written under `runtime/`, which is ignored by Git.
 
 ## Environment Variables
 
