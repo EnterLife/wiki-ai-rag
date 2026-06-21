@@ -1,0 +1,33 @@
+name: wiki-ai-rag
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wiki-ai-rag-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wiki_ai_rag}
+      POSTGRES_USER: ${POSTGRES_USER:-wiki_ai_rag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wiki_ai_rag}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wiki_ai_rag} -d ${POSTGRES_DB:-wiki_ai_rag}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.5
+    container_name: wiki-ai-rag-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  postgres_data:
+  qdrant_data:
+
