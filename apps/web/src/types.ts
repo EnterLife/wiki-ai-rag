@@ -20,6 +20,8 @@ export type AskResponse = {
   answer: string;
   citations: Citation[];
   status: "answered" | "insufficient_context" | "error";
+  confidence?: number | null;
+  insufficient_context_reason?: string | null;
 };
 
 export type Source = {

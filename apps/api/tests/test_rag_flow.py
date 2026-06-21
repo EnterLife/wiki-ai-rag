@@ -47,6 +47,7 @@ def test_filesystem_source_can_be_indexed_and_queried(client: TestClient, tmp_pa
     assert ask_response.status_code == 200
     payload = ask_response.json()
     assert payload["status"] == "answered"
+    assert payload["confidence"] > 0
     assert payload["citations"][0]["source_id"] == source_id
     assert payload["citations"][0]["chunk_id"].startswith("chk_")
     assert payload["citations"][0]["document_id"] == "product.md"
@@ -73,6 +74,8 @@ def test_ask_refuses_when_no_context_matches(client: TestClient) -> None:
         "answer": "В базе знаний нет достаточной информации для ответа на этот вопрос.",
         "citations": [],
         "status": "insufficient_context",
+        "confidence": None,
+        "insufficient_context_reason": "no_retrieved_context",
     }
 
 
@@ -114,6 +117,52 @@ def test_filesystem_indexing_continues_when_one_document_fails(
         json={"question": "Что поддерживает Product X?", "top_k": 3},
     )
     assert ask_response.json()["status"] == "answered"
+
+
+def test_source_indexing_config_controls_chunk_size(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "long.md").write_text(
+        "A" * 220 + "\n\n" + "B" * 220 + "\n\n" + "ERROR_0x345A resolution steps.",
+        encoding="utf-8",
+    )
+
+    source_response = client.post(
+        "/api/v1/sources",
+        json={
+            "name": "Chunked Wiki",
+            "type": "filesystem",
+            "config": {
+                "path": str(wiki_dir),
+                "indexing": {"max_chars": 260, "overlap_chars": 20},
+            },
+            "enabled": True,
+            "schedule": {"mode": "manual"},
+        },
+    )
+    source_id = source_response.json()["id"]
+
+    indexing_response = client.post(
+        "/api/v1/indexing/jobs",
+        json={"source_id": source_id, "mode": "full"},
+    )
+    assert indexing_response.status_code == 202
+    assert indexing_response.json()["status"] == "completed"
+
+    ask_response = client.post(
+        "/api/v1/ask",
+        json={"question": "ERROR_0x345A", "source_ids": [source_id], "top_k": 1},
+    )
+    citation = ask_response.json()["citations"][0]
+    chunk_response = client.get(f"/api/v1/chunks/{citation['chunk_id']}")
+
+    metadata = chunk_response.json()["metadata"]
+    assert metadata["chunk_count"] == 3
+    assert metadata["chunk_index"] == 2
+    assert metadata["previous_chunk_id"] is not None
 
 
 def test_ask_can_be_filtered_by_source_ids(client: TestClient, tmp_path: Path) -> None:

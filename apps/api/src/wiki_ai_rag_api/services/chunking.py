@@ -33,17 +33,31 @@ def chunk_document(
     if not normalized:
         return []
 
+    metadata = dict(metadata)
     chunks: list[TextChunk] = []
-    for chunk_text in _split_text(normalized, max_chars=max_chars, overlap_chars=overlap_chars):
+    chunk_texts = list(_split_text(normalized, max_chars=max_chars, overlap_chars=overlap_chars))
+    chunk_ids = [f"chk_{uuid4().hex[:16]}" for _ in chunk_texts]
+    for index, chunk_text in enumerate(chunk_texts):
         content_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
+        chunk_metadata = {
+            **metadata,
+            "chunk_index": index,
+            "chunk_count": len(chunk_texts),
+            "token_estimate": _estimate_tokens(chunk_text),
+            "split_strategy": "semantic_paragraph",
+            "previous_chunk_id": chunk_ids[index - 1] if index > 0 else None,
+            "next_chunk_id": chunk_ids[index + 1] if index < len(chunk_ids) - 1 else None,
+        }
+        if "parent_section" not in chunk_metadata:
+            chunk_metadata["parent_section"] = chunk_metadata.get("section")
         chunks.append(
             TextChunk(
-                chunk_id=f"chk_{uuid4().hex[:16]}",
+                chunk_id=chunk_ids[index],
                 document_id=document_id,
                 source_id=source_id,
                 title=title,
                 text=chunk_text,
-                metadata=metadata,
+                metadata=chunk_metadata,
                 hash=content_hash,
             )
         )
@@ -97,3 +111,7 @@ def _with_overlap(previous: str, paragraph: str, overlap_chars: int) -> str:
     overlap = previous[-overlap_chars:].strip()
     return f"{overlap}\n{paragraph}".strip()
 
+
+def _estimate_tokens(text: str) -> int:
+    # Rough, language-agnostic estimate good enough for chunk diagnostics.
+    return max(1, len(text) // 4)

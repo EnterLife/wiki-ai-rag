@@ -4,6 +4,7 @@ import logging
 from wiki_ai_rag_api.core.config import get_settings
 from wiki_ai_rag_api.core.logging import log_event
 from wiki_ai_rag_api.schemas.ask import AskRequest, AskResponse, Citation
+from wiki_ai_rag_api.services.conversation import conversation_memory
 from wiki_ai_rag_api.services.llm import GroundedContext, LlmService
 from wiki_ai_rag_api.services.metrics import metrics_registry
 from wiki_ai_rag_api.services.policy import INSUFFICIENT_CONTEXT_MESSAGE
@@ -22,14 +23,23 @@ class RagService:
         self.llm = llm or LlmService()
 
     async def answer(self, request: AskRequest) -> AskResponse:
+        settings = get_settings()
+        retrieval_question = request.question
+        if settings.conversation_memory_enabled:
+            retrieval_question = conversation_memory.build_retrieval_query(
+                session_id=request.session_id,
+                question=request.question,
+                max_turns=settings.conversation_memory_max_turns,
+            )
         log_event(
             logger,
             "rag.question.received",
             **_question_log_fields(request),
+            memory_enabled=settings.conversation_memory_enabled,
         )
         with metrics_registry.time_block("ask.retrieval_ms"):
             chunks = await self.retrieval.search(
-                query=request.question,
+                query=retrieval_question,
                 top_k=request.top_k,
                 source_ids=request.source_ids,
             )
@@ -40,6 +50,8 @@ class RagService:
             retrieved_count=len(chunks),
             source_ids=sorted({chunk.source_id for chunk in chunks}),
             max_score=round(max((chunk.score for chunk in chunks), default=0.0), 4),
+            max_vector_score=round(max((chunk.vector_score for chunk in chunks), default=0.0), 4),
+            max_keyword_score=round(max((chunk.keyword_score for chunk in chunks), default=0.0), 4),
         )
         if not chunks:
             metrics_registry.increment("ask.insufficient_context")
@@ -53,6 +65,7 @@ class RagService:
                 answer=INSUFFICIENT_CONTEXT_MESSAGE,
                 citations=[],
                 status="insufficient_context",
+                insufficient_context_reason="no_retrieved_context",
             )
 
         citations = [_citation_from_chunk(index, chunk) for index, chunk in enumerate(chunks, start=1)]
@@ -82,9 +95,17 @@ class RagService:
                 answer=INSUFFICIENT_CONTEXT_MESSAGE,
                 citations=[],
                 status="insufficient_context",
+                insufficient_context_reason="llm_refused_context",
             )
 
         metrics_registry.increment("ask.answered")
+        if settings.conversation_memory_enabled:
+            conversation_memory.record_turn(
+                session_id=request.session_id,
+                question=request.question,
+                answer=answer,
+                max_turns=settings.conversation_memory_max_turns,
+            )
         log_event(
             logger,
             "rag.answer.completed",
@@ -96,6 +117,7 @@ class RagService:
             answer=answer,
             citations=citations,
             status="answered",
+            confidence=_confidence_from_chunks(chunks),
         )
 
 
@@ -119,6 +141,13 @@ def _short_quote(text: str, max_chars: int = 500) -> str:
     if len(compact) <= max_chars:
         return compact
     return f"{compact[: max_chars - 1].rstrip()}..."
+
+
+def _confidence_from_chunks(chunks: list[RetrievedChunk]) -> float:
+    if not chunks:
+        return 0.0
+    max_score = max(chunk.score for chunk in chunks)
+    return round(min(1.0, max(0.0, max_score)), 4)
 
 
 def _question_hash(question: str) -> str:

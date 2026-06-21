@@ -32,6 +32,12 @@ class IndexingRunResult:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ChunkingConfig:
+    max_chars: int = 1800
+    overlap_chars: int = 220
+
+
 class IndexingService:
     def __init__(
         self,
@@ -204,6 +210,7 @@ class IndexingService:
             raise ValueError("Filesystem path is unavailable")
 
         result = IndexingRunResult()
+        chunking_config = _chunking_config(source)
         async for document in connector.iter_documents():
             try:
                 path = Path(document.metadata["path"])
@@ -214,6 +221,8 @@ class IndexingService:
                     title=document.title,
                     text=text,
                     metadata=document.metadata,
+                    max_chars=chunking_config.max_chars,
+                    overlap_chars=chunking_config.overlap_chars,
                 )
                 result.chunks.extend(chunks)
                 result.processed_documents += 1
@@ -228,6 +237,7 @@ class IndexingService:
             raise ValueError("PostgreSQL connection is unavailable")
 
         result = IndexingRunResult()
+        chunking_config = _chunking_config(source)
         async for document in connector.iter_documents():
             try:
                 chunks = chunk_document(
@@ -236,6 +246,8 @@ class IndexingService:
                     title=document.title,
                     text=document.body,
                     metadata=document.metadata,
+                    max_chars=chunking_config.max_chars,
+                    overlap_chars=chunking_config.overlap_chars,
                 )
                 result.chunks.extend(chunks)
                 result.processed_documents += 1
@@ -250,6 +262,7 @@ class IndexingService:
             raise ValueError("SQLite database is unavailable")
 
         result = IndexingRunResult()
+        chunking_config = _chunking_config(source)
         async for document in connector.iter_documents():
             try:
                 chunks = chunk_document(
@@ -258,6 +271,8 @@ class IndexingService:
                     title=document.title,
                     text=document.body,
                     metadata=document.metadata,
+                    max_chars=chunking_config.max_chars,
+                    overlap_chars=chunking_config.overlap_chars,
                 )
                 result.chunks.extend(chunks)
                 result.processed_documents += 1
@@ -290,3 +305,17 @@ class IndexingService:
             finished_at=job["finished_at"],
             error=job["error"],
         )
+
+
+def _chunking_config(source: dict) -> ChunkingConfig:
+    config = source.get("config", {})
+    indexing_config = config.get("indexing", {}) if isinstance(config, dict) else {}
+    max_chars = int(indexing_config.get("max_chars", ChunkingConfig.max_chars))
+    overlap_chars = int(indexing_config.get("overlap_chars", ChunkingConfig.overlap_chars))
+    if max_chars < 200:
+        raise ValueError("indexing.max_chars must be at least 200")
+    if overlap_chars < 0:
+        raise ValueError("indexing.overlap_chars must be non-negative")
+    if overlap_chars >= max_chars:
+        raise ValueError("indexing.overlap_chars must be smaller than indexing.max_chars")
+    return ChunkingConfig(max_chars=max_chars, overlap_chars=overlap_chars)

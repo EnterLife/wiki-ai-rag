@@ -39,7 +39,8 @@ No source - no answer.
 - `apps/web` - React frontend.
 - `apps/web/src/App.tsx` - initial chat and source UI.
 - `apps/web/src/api` - frontend API client.
-- `docs` - architecture, API, indexing, LLM policy and planning docs.
+- `README.md` - canonical project documentation.
+- `docs/decisions` - architecture decision records and project history.
 - `infra` - local Docker Compose and environment examples.
 - `packages` - future shared packages.
 

@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     question_rate_limit_per_minute: int = 60
     log_level: str = "INFO"
     log_question_text: bool = False
+    retrieval_vector_weight: float = 0.65
+    retrieval_keyword_weight: float = 0.35
+    retrieval_keyword_candidate_limit: int = 200
+    retrieval_candidates_top_k: int = 50
+    reranker_provider: str = "none"
+    conversation_memory_enabled: bool = False
+    conversation_memory_max_turns: int = 6
+    agentic_rag_enabled: bool = False
+    agentic_max_steps: int = 3
 
     @field_validator("api_cors_origins", mode="before")
     @classmethod

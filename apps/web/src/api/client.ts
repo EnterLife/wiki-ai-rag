@@ -39,7 +39,11 @@ function adminHeaders(): HeadersInit {
   return ADMIN_API_KEY ? { "X-Admin-API-Key": ADMIN_API_KEY } : {};
 }
 
-export async function askQuestion(question: string, sourceIds?: string[]): Promise<AskResponse> {
+export async function askQuestion(
+  question: string,
+  sourceIds?: string[],
+  sessionId?: string,
+): Promise<AskResponse> {
   const response = await fetch(`${API_BASE_URL}/ask`, {
     method: "POST",
     headers: {
@@ -49,6 +53,7 @@ export async function askQuestion(question: string, sourceIds?: string[]): Promi
     body: JSON.stringify({
       question,
       source_ids: sourceIds?.length ? sourceIds : undefined,
+      session_id: sessionId,
       top_k: 8,
     }),
   });

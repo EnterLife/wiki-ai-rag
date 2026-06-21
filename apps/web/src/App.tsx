@@ -26,6 +26,7 @@ const initialMessages: ChatMessage[] = [
 
 export function App() {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const [sessionId] = useState(() => crypto.randomUUID());
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [lastResponse, setLastResponse] = useState<AskResponse | null>(null);
@@ -91,7 +92,7 @@ export function App() {
     setIsLoading(true);
 
     try {
-      const response = await askQuestion(trimmedQuestion, selectedSourceIds);
+      const response = await askQuestion(trimmedQuestion, selectedSourceIds, sessionId);
       setLastResponse(response);
       setMessages((current) => [...current, { role: "assistant", content: response.answer }]);
     } catch (error) {

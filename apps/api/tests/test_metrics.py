@@ -31,7 +31,8 @@ def test_metrics_endpoint_reports_ask_and_indexing_activity(
     payload = response.json()
     assert payload["counters"]["indexing.completed"] == 1
     assert payload["counters"]["ask.answered"] == 1
+    assert payload["counters"]["retrieval.searches"] == 1
+    assert payload["counters"]["retrieval.results"] >= 1
     assert payload["durations"]["indexing.run_ms"]["count"] == 1
     assert payload["durations"]["ask.retrieval_ms"]["count"] == 1
     assert payload["durations"]["ask.llm_ms"]["count"] == 1
-

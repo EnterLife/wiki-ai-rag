@@ -48,8 +48,44 @@ def test_json_vector_store_searches_and_filters_sources(tmp_path: Path) -> None:
     )
 
     assert [result.chunk_id for result in results] == ["chk_a"]
+    assert results[0].combined_score == results[0].score
+    assert results[0].keyword_score > 0
+    assert results[0].metadata["retrieval"]["keyword_score"] > 0
 
     chunk = vector_store.get_chunk("chk_a")
     assert chunk is not None
     assert chunk.document_id == "doc_a"
     assert "PostgreSQL" in chunk.text
+
+
+def test_json_vector_store_hybrid_search_finds_exact_keyword_without_vector_match(
+    tmp_path: Path,
+) -> None:
+    provider = HashingEmbeddingProvider(dimension=32)
+    store = JsonStore(tmp_path / "state.json")
+    vector_store = JsonVectorStore(store, vector_weight=0.65, keyword_weight=0.35)
+    vector_store.replace_chunks_for_source(
+        "src_a",
+        [
+            {
+                "chunk_id": "chk_error",
+                "document_id": "doc_error",
+                "source_id": "src_a",
+                "title": "Incident",
+                "text": "Resolution steps for ERROR_0x345A are documented here.",
+                "embedding": [0.0] * 32,
+                "metadata": {},
+                "hash": "hash_error",
+            }
+        ],
+    )
+
+    results = vector_store.search(
+        query="ERROR_0x345A",
+        query_embedding=provider.embed("unrelated semantic vector"),
+        top_k=3,
+    )
+
+    assert [result.chunk_id for result in results] == ["chk_error"]
+    assert results[0].vector_score == 0
+    assert results[0].keyword_score == 1

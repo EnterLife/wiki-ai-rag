@@ -34,3 +34,4 @@ def test_rag_drops_citations_when_llm_refuses() -> None:
     assert response.status == "insufficient_context"
     assert response.answer == INSUFFICIENT_CONTEXT_MESSAGE
     assert response.citations == []
+    assert response.insufficient_context_reason == "llm_refused_context"
