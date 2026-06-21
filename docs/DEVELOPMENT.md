@@ -76,6 +76,8 @@ npm run build
 ```bash
 STORAGE_PATH=storage/wiki_ai_rag_state.json
 VECTOR_STORE_PROVIDER=json
+QDRANT_URL=http://localhost:6333
+QDRANT_TRUST_ENV=false
 EMBEDDINGS_PROVIDER=hashing
 EMBEDDINGS_BASE_URL=http://localhost:1234/v1
 EMBEDDINGS_MODEL=text-embedding-3-small
@@ -94,7 +96,7 @@ LOG_LEVEL=INFO
 LOG_QUESTION_TEXT=false
 ```
 
-`STORAGE_PATH` задает локальное JSON-хранилище для sources, indexing jobs и JSON vector store. `VECTOR_STORE_PROVIDER=json` не требует Docker-сервисов. `VECTOR_STORE_PROVIDER=qdrant` использует Qdrant из `infra/docker-compose.yml`. `EMBEDDINGS_PROVIDER=hashing` включает deterministic local embeddings без внешних сервисов. `EMBEDDINGS_PROVIDER=openai_compatible` вызывает `{EMBEDDINGS_BASE_URL}/embeddings`; `EMBEDDING_DIMENSION` должен совпадать с размерностью модели. `ENABLE_SCHEDULER=true` включает периодическую проверку scheduled sources. `LLM_PROVIDER=extractive` безопасно работает без внешней модели; `ollama` и `openai_compatible` включаются явно. `AUTH_ENABLED=true` требует `X-User-API-Key` для `/ask` и `X-Admin-API-Key` для source/indexing/audit endpoints. `CREDENTIALS_ENCRYPTION_KEY` включает Fernet-шифрование чувствительных source config полей. `RATE_LIMIT_ENABLED=true` ограничивает `/ask` по IP.
+`STORAGE_PATH` задает локальное JSON-хранилище для sources, indexing jobs и JSON vector store. `VECTOR_STORE_PROVIDER=json` не требует Docker-сервисов. `VECTOR_STORE_PROVIDER=qdrant` использует Qdrant из `infra/docker-compose.yml`. `QDRANT_TRUST_ENV=false` защищает локальный Qdrant-клиент от системных proxy/relay настроек; включайте `true` только если Qdrant должен ходить через proxy. `EMBEDDINGS_PROVIDER=hashing` включает deterministic local embeddings без внешних сервисов. `EMBEDDINGS_PROVIDER=openai_compatible` вызывает `{EMBEDDINGS_BASE_URL}/embeddings`; `EMBEDDING_DIMENSION` должен совпадать с размерностью модели. `ENABLE_SCHEDULER=true` включает периодическую проверку scheduled sources. `LLM_PROVIDER=extractive` безопасно работает без внешней модели; `ollama` и `openai_compatible` включаются явно. `AUTH_ENABLED=true` требует `X-User-API-Key` для `/ask` и `X-Admin-API-Key` для source/indexing/audit endpoints. `CREDENTIALS_ENCRYPTION_KEY` включает Fernet-шифрование чувствительных source config полей. `RATE_LIMIT_ENABLED=true` ограничивает `/ask` по IP.
 `LOG_LEVEL` управляет уровнем JSON-логов приложения. `LOG_QUESTION_TEXT=false` оставляет в логах только hash и длину вопроса; полный текст включайте только в доверенной локальной среде.
 
 ## Code conventions

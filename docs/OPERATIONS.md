@@ -26,6 +26,14 @@ Indexing events include job start, completion and failure with source id, mode a
 document/chunk counters. Credentials are not logged. Full question text is not logged
 by default; set `LOG_QUESTION_TEXT=true` only in trusted local environments.
 
+## Qdrant Connectivity
+
+`VECTOR_STORE_PROVIDER=qdrant` uses the Qdrant client against `QDRANT_URL`.
+On Windows with Docker Desktop, a local REST relay/proxy can return `503` to Python
+`httpx` clients while browser, `curl` or PowerShell still show Qdrant as healthy.
+The default `QDRANT_TRUST_ENV=false` bypasses environment proxy settings for this
+client; set it to `true` only when Qdrant must be reached through a proxy.
+
 ## JSON Vector Store Backup
 
 When `VECTOR_STORE_PROVIDER=json`, the local state file contains sources, jobs, audit log and chunks.

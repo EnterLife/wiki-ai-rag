@@ -108,10 +108,16 @@ class JsonVectorStore:
 
 
 class QdrantVectorStore:
-    def __init__(self, url: str, collection_name: str, vector_size: int) -> None:
+    def __init__(
+        self,
+        url: str,
+        collection_name: str,
+        vector_size: int,
+        trust_env: bool = False,
+    ) -> None:
         from qdrant_client import QdrantClient
 
-        self.client = QdrantClient(url=url)
+        self.client = QdrantClient(url=url, trust_env=trust_env, check_compatibility=False)
         self.collection_name = collection_name
         self.vector_size = vector_size
 
@@ -164,23 +170,18 @@ class QdrantVectorStore:
         self._ensure_collection()
 
         query_filter = self._source_filter(source_ids)
-        if hasattr(self.client, "query_points"):
-            response = self.client.query_points(
-                collection_name=self.collection_name,
-                query=query_embedding,
-                query_filter=query_filter,
+        from qdrant_client.models import SearchRequest
+
+        response = self.client.http.search_api.search_points(
+            collection_name=self.collection_name,
+            search_request=SearchRequest(
+                vector=query_embedding,
+                filter=query_filter,
                 limit=top_k,
                 with_payload=True,
-            )
-            points = response.points
-        else:
-            points = self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_embedding,
-                query_filter=query_filter,
-                limit=top_k,
-                with_payload=True,
-            )
+            ),
+        )
+        points = response.result
 
         return [self._point_to_result(point) for point in points if point.payload]
 
@@ -257,6 +258,7 @@ def get_vector_store() -> VectorStore:
             url=settings.qdrant_url,
             collection_name=settings.qdrant_collection,
             vector_size=settings.embedding_dimension,
+            trust_env=settings.qdrant_trust_env,
         )
     raise ValueError(f"Vector store provider '{settings.vector_store_provider}' is not implemented yet")
 

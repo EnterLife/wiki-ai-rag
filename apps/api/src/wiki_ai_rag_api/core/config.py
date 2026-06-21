@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     qdrant_url: str = "http://localhost:6333"
     qdrant_collection: str = "wiki_ai_rag_chunks"
+    qdrant_trust_env: bool = False
     storage_path: Path = Path("storage/wiki_ai_rag_state.json")
     vector_store_provider: str = "json"
     embedding_dimension: int = 256

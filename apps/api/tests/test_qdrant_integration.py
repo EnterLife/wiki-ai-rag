@@ -17,6 +17,7 @@ def test_qdrant_vector_store_round_trip() -> None:
         url=os.getenv("QDRANT_URL", "http://localhost:6333"),
         collection_name=collection_name,
         vector_size=3,
+        trust_env=os.getenv("QDRANT_TRUST_ENV") == "true",
     )
 
     try:
@@ -48,4 +49,3 @@ def test_qdrant_vector_store_round_trip() -> None:
         assert chunk.document_id == "doc_qdrant"
     finally:
         store.client.delete_collection(collection_name=collection_name)
-
