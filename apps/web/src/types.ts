@@ -10,6 +10,7 @@ export type Citation = {
   source_id: string;
   title: string;
   section?: string | null;
+  page?: number | null;
   url?: string | null;
   quote: string;
   timestamp?: string | null;
@@ -29,6 +30,7 @@ export type Source = {
   name: string;
   type: "filesystem" | "postgresql" | "mysql" | "sqlite" | "wiki" | "transcript";
   enabled: boolean;
+  access_groups: string[];
   document_count: number;
   last_indexed_at?: string | null;
 };

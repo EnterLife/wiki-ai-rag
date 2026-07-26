@@ -47,6 +47,18 @@ select {
   font-weight: 700;
 }
 
+.auth-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid #c8d0ca;
+  border-radius: 8px;
+  display: inline-flex;
+  justify-content: center;
+  margin-left: auto;
+  min-height: 32px;
+  min-width: 32px;
+}
+
 .source-panel {
   display: grid;
   gap: 14px;

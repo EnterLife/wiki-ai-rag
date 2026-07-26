@@ -1,6 +1,87 @@
 name: wiki-ai-rag
 
 services:
+  api:
+    profiles: ["app"]
+    build:
+      context: ../apps/api
+    container_name: wiki-ai-rag-api
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      POSTGRES_HOST: postgres
+      QDRANT_URL: http://qdrant:6333
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ../storage:/app/storage
+      - "${WIKI_DATA_PATH:-../data}:/data:ro"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    profiles: ["app"]
+    build:
+      context: ../apps/api
+    container_name: wiki-ai-rag-worker
+    command:
+      [
+        "celery",
+        "-A",
+        "wiki_ai_rag_api.tasks.celery_app",
+        "worker",
+        "--loglevel=INFO",
+      ]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      POSTGRES_HOST: postgres
+      QDRANT_URL: http://qdrant:6333
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    volumes:
+      - ../storage:/app/storage
+      - "${WIKI_DATA_PATH:-../data}:/data:ro"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    profiles: ["app"]
+    build:
+      context: ../apps/web
+      args:
+        VITE_OIDC_AUTHORITY: ${VITE_OIDC_AUTHORITY:-}
+        VITE_OIDC_CLIENT_ID: ${VITE_OIDC_CLIENT_ID:-}
+        VITE_OIDC_REDIRECT_URI: ${VITE_OIDC_REDIRECT_URI:-}
+        VITE_OIDC_SCOPE: ${VITE_OIDC_SCOPE:-openid profile}
+    container_name: wiki-ai-rag-web
+    ports:
+      - "${WEB_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     container_name: wiki-ai-rag-postgres
@@ -19,15 +100,37 @@ services:
       retries: 5
 
   qdrant:
-    image: qdrant/qdrant:v1.9.5
+    image: qdrant/qdrant:v1.16.0
     container_name: wiki-ai-rag-qdrant
     ports:
       - "6333:6333"
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: wiki-ai-rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
   qdrant_data:
-
+  redis_data:

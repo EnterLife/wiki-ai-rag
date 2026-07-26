@@ -1,4 +1,4 @@
-import { CheckCircle2, Database, FileText, Play, Plus, RefreshCw, Send, Trash2 } from "lucide-react";
+import { CheckCircle2, Database, FileText, LogIn, LogOut, Play, Plus, RefreshCw, Send, Trash2 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import {
   ApiError,
@@ -16,6 +16,7 @@ import {
   updateSource,
 } from "./api/client";
 import type { AskResponse, AuditEvent, ChatMessage, IndexingJob, MetricsSnapshot, Source } from "./types";
+import { oidcIsConfigured, signIn, signOut } from "./auth";
 
 const initialMessages: ChatMessage[] = [
   {
@@ -37,6 +38,7 @@ export function App() {
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [sourceType, setSourceType] = useState<"filesystem" | "postgresql" | "sqlite">("filesystem");
   const [sourceName, setSourceName] = useState("Local Wiki");
+  const [sourceAccessGroups, setSourceAccessGroups] = useState("");
   const [sourcePath, setSourcePath] = useState("");
   const [pgHost, setPgHost] = useState("localhost");
   const [pgPort, setPgPort] = useState(5432);
@@ -59,6 +61,9 @@ export function App() {
   const [isScheduled, setIsScheduled] = useState(false);
   const [intervalHours, setIntervalHours] = useState(6);
   const [sourceStatus, setSourceStatus] = useState("Источники не загружены");
+  const [isAuthenticated] = useState(
+    () => sessionStorage.getItem("wiki-ai-rag-access-token") !== null,
+  );
 
   useEffect(() => {
     void refreshSources();
@@ -66,16 +71,22 @@ export function App() {
 
   async function refreshSources() {
     try {
-      const [nextSources, nextJobs, nextAuditEvents, nextMetrics] = await Promise.all([
-        listSources(),
+      const nextSources = await listSources();
+      const [jobsResult, auditResult, metricsResult] = await Promise.allSettled([
         listIndexingJobs(),
         listAuditEvents(),
         getMetrics(),
       ]);
       setSources(nextSources);
-      setJobs(nextJobs.slice(-5).reverse());
-      setAuditEvents(nextAuditEvents.slice(-5).reverse());
-      setMetrics(nextMetrics);
+      if (jobsResult.status === "fulfilled") {
+        setJobs(jobsResult.value.slice(-5).reverse());
+      }
+      if (auditResult.status === "fulfilled") {
+        setAuditEvents(auditResult.value.slice(-5).reverse());
+      }
+      if (metricsResult.status === "fulfilled") {
+        setMetrics(metricsResult.value);
+      }
       setSourceStatus(nextSources.length ? "Источники загружены" : "Источники пока не добавлены");
     } catch (error) {
       setSourceStatus(errorMessage(error, "API источников недоступен"));
@@ -115,7 +126,12 @@ export function App() {
         : { mode: "manual" as const };
       if (sourceType === "filesystem") {
         if (!sourcePath.trim()) return;
-        await createFilesystemSource(sourceName.trim(), sourcePath.trim(), schedule);
+        await createFilesystemSource(
+          sourceName.trim(),
+          sourcePath.trim(),
+          schedule,
+          splitCsv(sourceAccessGroups),
+        );
         setSourcePath("");
       } else if (sourceType === "postgresql") {
         await createPostgresSource(
@@ -134,6 +150,7 @@ export function App() {
             limit: pgLimit || undefined,
           },
           schedule,
+          splitCsv(sourceAccessGroups),
         );
         setPgPassword("");
       } else {
@@ -149,6 +166,7 @@ export function App() {
             limit: sqliteLimit || undefined,
           },
           schedule,
+          splitCsv(sourceAccessGroups),
         );
       }
       await refreshSources();
@@ -172,8 +190,8 @@ export function App() {
     try {
       const job = await runIndexing(sourceId);
       setSourceStatus(
-        job.status === "completed"
-          ? `Индексация завершена: ${job.processed_documents}`
+        job.status === "completed" || job.status === "completed_with_errors"
+          ? `Индексация завершена: ${job.processed_documents}, ошибок: ${job.failed_documents}`
           : `Индексация: ${job.status}`,
       );
       await refreshSources();
@@ -216,6 +234,16 @@ export function App() {
         <div className="brand">
           <Database size={22} />
           <span>Wiki AI RAG</span>
+          {oidcIsConfigured() ? (
+            <button
+              className="auth-button"
+              onClick={() => void (isAuthenticated ? signOut() : signIn())}
+              title={isAuthenticated ? "Выйти" : "Войти"}
+              type="button"
+            >
+              {isAuthenticated ? <LogOut size={16} /> : <LogIn size={16} />}
+            </button>
+          ) : null}
         </div>
 
         <section className="source-panel">
@@ -240,6 +268,12 @@ export function App() {
               aria-label="Название источника"
               value={sourceName}
               onChange={(event) => setSourceName(event.target.value)}
+            />
+            <input
+              aria-label="Группы доступа"
+              placeholder="engineering,finance (пусто — все пользователи)"
+              value={sourceAccessGroups}
+              onChange={(event) => setSourceAccessGroups(event.target.value)}
             />
             {sourceType === "filesystem" ? (
               <input
@@ -541,6 +575,8 @@ export function App() {
                 <div className="citation-meta">
                   <span>{citation.document_id}</span>
                   <span>{citation.chunk_id}</span>
+                  {citation.section ? <span>{citation.section}</span> : null}
+                  {citation.page ? <span>Страница {citation.page}</span> : null}
                   {citation.url ? (
                     <a href={citation.url} rel="noreferrer" target="_blank">
                       Открыть

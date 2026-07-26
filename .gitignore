@@ -21,6 +21,8 @@ dist/
 # Runtime data
 data/
 storage/
+!apps/api/src/wiki_ai_rag_api/storage/
+!apps/api/src/wiki_ai_rag_api/storage/**
 uploads/
 runtime/
 

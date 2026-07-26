@@ -2,6 +2,7 @@ import pytest
 
 from wiki_ai_rag_api.core.config import get_settings
 from wiki_ai_rag_api.schemas.ask import AskRequest
+from wiki_ai_rag_api.services.access import AccessContext
 from wiki_ai_rag_api.services.conversation import reset_conversation_memory
 from wiki_ai_rag_api.services.rag import RagService
 from wiki_ai_rag_api.services.retrieval import RetrievedChunk
@@ -11,7 +12,13 @@ class CapturingRetrieval:
     def __init__(self) -> None:
         self.queries: list[str] = []
 
-    async def search(self, query: str, top_k: int, source_ids: list[str] | None = None):
+    async def search(
+        self,
+        query: str,
+        top_k: int,
+        source_ids: list[str] | None = None,
+        access_context=None,
+    ):
         self.queries.append(query)
         return [
             RetrievedChunk(
@@ -51,3 +58,29 @@ async def test_conversation_memory_expands_follow_up_retrieval_query(
 
     assert retrieval.queries[0] == "Расскажи про OpenVPN"
     assert retrieval.queries[1] == "Расскажи про OpenVPN\nА маршрутизация?"
+
+
+@pytest.mark.asyncio
+async def test_conversation_memory_is_isolated_by_authenticated_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CONVERSATION_MEMORY_ENABLED", "true")
+    get_settings.cache_clear()
+    reset_conversation_memory()
+    retrieval = CapturingRetrieval()
+
+    try:
+        service = RagService(retrieval=retrieval, llm=CitingLlm())
+        await service.answer(
+            AskRequest(question="Private finance question", session_id="shared-session"),
+            access_context=AccessContext(subject="finance-user"),
+        )
+        await service.answer(
+            AskRequest(question="Follow up", session_id="shared-session"),
+            access_context=AccessContext(subject="engineering-user"),
+        )
+    finally:
+        get_settings.cache_clear()
+        reset_conversation_memory()
+
+    assert retrieval.queries == ["Private finance question", "Follow up"]

@@ -25,12 +25,15 @@ The project has a working MVP plus a first RAG v2 slice:
 - Supported file parsing: Markdown, TXT, PDF, DOCX, HTML, CSV and JSON.
 - Vector stores: local JSON vector store for lightweight development and Qdrant for
   Docker-backed validation.
+- Metadata stores: local JSON for development and PostgreSQL for production.
 - Embeddings: deterministic local hashing provider and OpenAI-compatible embeddings
   provider.
 - LLM providers: local extractive provider, Ollama and OpenAI-compatible chat
   completions.
-- RAG v2 retrieval: configurable chunking, hybrid vector + keyword scoring,
-  retrieval metrics, retrieval evaluation and reranker abstraction.
+- RAG v3 retrieval: structure-aware chunking, BM25 + dense reciprocal-rank fusion,
+  relevance threshold, retrieval evaluation and local or HTTP reranking.
+- Production controls: OIDC/JWKS authentication, source-group ACLs, Celery indexing,
+  deterministic chunk ids and strict structured answer validation.
 - Optional features: short-term conversation memory and an opt-in tool-oriented
   agentic ask endpoint.
 
@@ -48,6 +51,10 @@ scripts/      Windows and Linux helper scripts
 
 `README.md` is the canonical project document. `docs/decisions` keeps architecture
 decision records that are useful as project history.
+
+For company rollout order, acceptance gates and required organizational inputs, see
+[`docs/company-rag-plan.md`](docs/company-rag-plan.md) and
+[`docs/production-rollout.md`](docs/production-rollout.md).
 
 Important backend modules:
 
@@ -114,6 +121,12 @@ Start infrastructure:
 
 ```powershell
 docker compose -f infra/docker-compose.yml up -d
+```
+
+Start the containerized API, worker and web UI as well:
+
+```powershell
+docker compose -f infra/docker-compose.yml --profile app up -d --build
 ```
 
 Create and run the backend:
@@ -284,11 +297,7 @@ Implemented source types:
 - `postgresql`
 - `sqlite`
 
-Reserved schema values that are not implemented yet:
-
-- `mysql`
-- `wiki`
-- `transcript`
+Unsupported source types are rejected by request validation.
 
 Filesystem source:
 
@@ -424,8 +433,7 @@ Reranker providers:
 
 - `none` - default, keeps retrieval order.
 - `keyword` - deterministic local reranker for smoke and evaluation scenarios.
-
-External BGE/Jina/HTTP rerankers are planned as future provider implementations.
+- `http` - external BGE/Jina-compatible HTTP reranker.
 
 Retrieval evaluation endpoint:
 
@@ -638,16 +646,20 @@ npm audit
 
 Most recent full validation in this workspace:
 
-- backend with PostgreSQL and Qdrant integration: `55 passed`;
-- backend lint: passed;
+- backend unit suite: `75 passed`, `2 skipped` integration tests;
+- backend compile, Ruff and mypy: passed;
 - frontend lint/build/audit: passed, `0 vulnerabilities`;
-- live smoke: indexing, `/ask`, `/evaluation/retrieval` and `/agentic/ask` succeeded.
+- Docker Compose configuration: valid.
+
+The PostgreSQL and Qdrant integration tests are opt-in and were skipped in this
+validation because the Docker daemon was unavailable.
 
 ## Operations
 
 Runtime state layers:
 
-- service metadata, sources, jobs and audit log in `STORAGE_PATH`;
+- service metadata, sources, jobs and audit log in PostgreSQL for production, or
+  `STORAGE_PATH` for lightweight development;
 - local JSON vector store or Qdrant collection;
 - PostgreSQL when used as local infrastructure or as an indexed source.
 
@@ -704,13 +716,19 @@ Completed:
 - Structured answer metadata.
 - Opt-in conversation memory.
 - Opt-in agentic ask endpoint with internal `search_knowledge_base` tool.
+- PostgreSQL metadata persistence and Celery/Redis background indexing.
+- Stable chunk ids and incremental embedding reuse.
+- Source-group ACL filtering and OIDC/JWKS authentication.
+- BM25 + dense RRF retrieval and HTTP reranker provider.
+- Structured answer/claim validation and prompt-injection boundaries.
+- Structure-aware Markdown, HTML, PDF, DOCX, CSV and JSON parsing.
+- Production Docker images, CI, SQL schema and rollout guide.
 
 Planned next:
 
 - persistent evaluation run history and UI;
-- external HTTP/BGE/Jina reranker providers;
-- full structured JSON LLM output validation and repair policy;
 - MCP-compatible server or adapter over the existing tool registry;
 - additional connectors such as MySQL/MariaDB, wiki exports, S3/MinIO and transcript
   sources;
-- production metadata persistence beyond the current JSON MVP store.
+- native sparse-vector BM25 when the target Qdrant deployment supports managed
+  inference or client-side sparse embeddings.

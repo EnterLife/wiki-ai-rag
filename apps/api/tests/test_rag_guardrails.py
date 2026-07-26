@@ -7,7 +7,13 @@ from wiki_ai_rag_api.services.retrieval import RetrievedChunk
 
 
 class FakeRetrieval:
-    async def search(self, query: str, top_k: int, source_ids: list[str] | None = None):
+    async def search(
+        self,
+        query: str,
+        top_k: int,
+        source_ids: list[str] | None = None,
+        access_context=None,
+    ):
         return [
             RetrievedChunk(
                 chunk_id="chk_1",

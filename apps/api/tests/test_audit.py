@@ -38,4 +38,5 @@ def test_admin_actions_are_written_to_audit_log(client: TestClient, tmp_path: Pa
         "indexing.run",
         "source.delete",
     ]
+    assert all(event["actor_subject"] == "system" for event in audit_response.json())
     assert all("password" not in str(event["details"]).lower() for event in audit_response.json())

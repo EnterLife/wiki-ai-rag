@@ -21,9 +21,13 @@ def install_error_handlers(app: FastAPI) -> None:
         exc: RequestValidationError,
     ) -> JSONResponse:
         metrics_registry.increment("api.validation_error")
+        errors = [
+            {key: value for key, value in error.items() if key != "ctx"}
+            for error in exc.errors()
+        ]
         return JSONResponse(
             status_code=422,
-            content={"status": "error", "detail": exc.errors()},
+            content={"status": "error", "detail": errors},
         )
 
     @app.exception_handler(Exception)

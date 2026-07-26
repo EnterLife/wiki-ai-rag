@@ -6,15 +6,16 @@ from typing import Any
 
 from wiki_ai_rag_api.core.config import get_settings
 from wiki_ai_rag_api.services.indexing import IndexingService
-from wiki_ai_rag_api.storage.json_store import JsonStore
+from wiki_ai_rag_api.storage.base import MetadataStore
+from wiki_ai_rag_api.storage.factory import get_metadata_store
 
 
 class IndexingScheduler:
-    def __init__(self, store: JsonStore | None = None) -> None:
+    def __init__(self, store: MetadataStore | None = None) -> None:
         settings = get_settings()
-        self.store = store or JsonStore(settings.storage_path)
+        self.store = store or get_metadata_store()
         self.poll_seconds = settings.scheduler_poll_seconds
-        self.scheduler = None
+        self.scheduler: Any = None
 
     def start(self) -> None:
         from apscheduler.schedulers.background import BackgroundScheduler
@@ -68,4 +69,3 @@ def _parse_datetime(value: str) -> datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
-

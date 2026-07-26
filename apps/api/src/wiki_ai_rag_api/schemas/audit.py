@@ -9,6 +9,8 @@ class AuditEvent(BaseModel):
     target_type: str
     target_id: str
     status: str
+    actor_subject: str = "system"
+    actor_groups: list[str] = Field(default_factory=list)
+    actor_is_admin: bool = False
     details: dict = Field(default_factory=dict)
     created_at: datetime
-

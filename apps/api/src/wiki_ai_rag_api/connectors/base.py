@@ -21,6 +21,5 @@ class DataConnector(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def iter_documents(self) -> AsyncIterator[SourceDocument]:
+    def iter_documents(self) -> AsyncIterator[SourceDocument]:
         raise NotImplementedError
-

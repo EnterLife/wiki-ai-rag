@@ -51,6 +51,8 @@ def test_filesystem_source_can_be_indexed_and_queried(client: TestClient, tmp_pa
     assert payload["citations"][0]["source_id"] == source_id
     assert payload["citations"][0]["chunk_id"].startswith("chk_")
     assert payload["citations"][0]["document_id"] == "product.md"
+    assert payload["citations"][0]["section"] == "Product X"
+    assert payload["citations"][0]["url"] == "product.md"
     assert "PostgreSQL" in payload["citations"][0]["quote"]
 
     chunk_response = client.get(f"/api/v1/chunks/{payload['citations'][0]['chunk_id']}")
@@ -107,7 +109,7 @@ def test_filesystem_indexing_continues_when_one_document_fails(
 
     assert indexing_response.status_code == 202
     payload = indexing_response.json()
-    assert payload["status"] == "completed"
+    assert payload["status"] == "completed_with_errors"
     assert payload["processed_documents"] == 1
     assert payload["failed_documents"] == 1
     assert "broken.pdf" in payload["error"]

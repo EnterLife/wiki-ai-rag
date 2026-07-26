@@ -76,7 +76,15 @@ def _recall_at_k(
     chunks: list[RetrievedChunk],
     k: int,
 ) -> float:
-    return 1.0 if any(_is_relevant(item, chunk) for chunk in chunks[:k]) else 0.0
+    expected = _expected_evidence_keys(item)
+    if not expected:
+        return 0.0
+    found = {
+        key
+        for chunk in chunks[:k]
+        for key in _matching_evidence_keys(item, chunk)
+    }
+    return round(len(found) / len(expected), 6)
 
 
 def _ndcg_at_k(
@@ -84,7 +92,12 @@ def _ndcg_at_k(
     chunks: list[RetrievedChunk],
     k: int,
 ) -> float:
-    relevances = [1.0 if _is_relevant(item, chunk) else 0.0 for chunk in chunks[:k]]
+    seen: set[tuple[str, str]] = set()
+    relevances: list[float] = []
+    for chunk in chunks[:k]:
+        new_matches = _matching_evidence_keys(item, chunk) - seen
+        relevances.append(1.0 if new_matches else 0.0)
+        seen.update(new_matches)
     dcg = sum(relevance / math.log2(index + 2) for index, relevance in enumerate(relevances))
     ideal_relevant_count = min(_expected_evidence_count(item), k)
     if ideal_relevant_count == 0:
@@ -94,11 +107,30 @@ def _ndcg_at_k(
 
 
 def _is_relevant(item: RetrievalEvaluationItem, chunk: RetrievedChunk) -> bool:
-    return chunk.chunk_id in item.expected_chunk_ids or chunk.document_id in item.expected_document_ids
+    return bool(_matching_evidence_keys(item, chunk))
 
 
 def _expected_evidence_count(item: RetrievalEvaluationItem) -> int:
-    return max(1, len(set(item.expected_chunk_ids).union(item.expected_document_ids)))
+    return len(_expected_evidence_keys(item))
+
+
+def _expected_evidence_keys(item: RetrievalEvaluationItem) -> set[tuple[str, str]]:
+    return {
+        *(("chunk", chunk_id) for chunk_id in item.expected_chunk_ids),
+        *(("document", document_id) for document_id in item.expected_document_ids),
+    }
+
+
+def _matching_evidence_keys(
+    item: RetrievalEvaluationItem,
+    chunk: RetrievedChunk,
+) -> set[tuple[str, str]]:
+    matches: set[tuple[str, str]] = set()
+    if chunk.chunk_id in item.expected_chunk_ids:
+        matches.add(("chunk", chunk.chunk_id))
+    if chunk.document_id in item.expected_document_ids:
+        matches.add(("document", chunk.document_id))
+    return matches
 
 
 def _average(values: list[float]) -> float:

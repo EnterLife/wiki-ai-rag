@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from wiki_ai_rag_api.services.parsing import parse_file
+from wiki_ai_rag_api.services.parsing import parse_file, parse_file_segments
 
 
 def test_parse_markdown_file(tmp_path: Path) -> None:
@@ -10,6 +10,22 @@ def test_parse_markdown_file(tmp_path: Path) -> None:
     path.write_text("# Product X\n\nMarkdown knowledge.", encoding="utf-8")
 
     assert "Markdown knowledge" in parse_file(path)
+
+
+def test_markdown_sections_are_preserved_for_citations(tmp_path: Path) -> None:
+    path = tmp_path / "guide.md"
+    path.write_text(
+        "# Setup\n\nInstall the client.\n\n## Troubleshooting\n\nRestart the service.",
+        encoding="utf-8",
+    )
+
+    segments = parse_file_segments(path)
+
+    assert [segment.metadata["section"] for segment in segments] == [
+        "Setup",
+        "Troubleshooting",
+    ]
+    assert "Restart" in segments[1].text
 
 
 def test_parse_txt_file_with_cp1251_fallback(tmp_path: Path) -> None:
@@ -59,4 +75,4 @@ def test_parse_pdf_file(tmp_path: Path) -> None:
         writer.write(pdf_file)
 
     assert "Product X PDF text" in parse_file(path)
-
+    assert parse_file_segments(path)[0].metadata["page"] == 1

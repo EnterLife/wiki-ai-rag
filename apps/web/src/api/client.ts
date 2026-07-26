@@ -1,8 +1,6 @@
 import type { AskResponse, AuditEvent, IndexingJob, MetricsSnapshot, Source, SourceTestResponse } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
-const USER_API_KEY = import.meta.env.VITE_USER_API_KEY;
-const ADMIN_API_KEY = import.meta.env.VITE_ADMIN_API_KEY;
 
 export class ApiError extends Error {
   constructor(
@@ -31,12 +29,9 @@ async function ensureOk(response: Response): Promise<void> {
   throw new ApiError(message, response.status);
 }
 
-function userHeaders(): HeadersInit {
-  return USER_API_KEY ? { "X-User-API-Key": USER_API_KEY } : {};
-}
-
-function adminHeaders(): HeadersInit {
-  return ADMIN_API_KEY ? { "X-Admin-API-Key": ADMIN_API_KEY } : {};
+function authHeaders(): HeadersInit {
+  const token = sessionStorage.getItem("wiki-ai-rag-access-token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export async function askQuestion(
@@ -48,7 +43,7 @@ export async function askQuestion(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...userHeaders(),
+      ...authHeaders(),
     },
     body: JSON.stringify({
       question,
@@ -64,8 +59,8 @@ export async function askQuestion(
 }
 
 export async function listSources(): Promise<Source[]> {
-  const response = await fetch(`${API_BASE_URL}/sources`, {
-    headers: adminHeaders(),
+  const response = await fetch(`${API_BASE_URL}/sources/available`, {
+    headers: authHeaders(),
   });
   await ensureOk(response);
   return response.json() as Promise<Source[]>;
@@ -75,18 +70,20 @@ export async function createFilesystemSource(
   name: string,
   path: string,
   schedule: { mode: "manual" } | { mode: "scheduled"; interval_hours: number },
+  accessGroups: string[] = [],
 ): Promise<Source> {
   const response = await fetch(`${API_BASE_URL}/sources`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...adminHeaders(),
+      ...authHeaders(),
     },
     body: JSON.stringify({
       name,
       type: "filesystem",
       config: { path },
       enabled: true,
+      access_groups: accessGroups,
       schedule,
     }),
   });
@@ -112,6 +109,7 @@ export async function createPostgresSource(
     limit?: number;
   },
   schedule: { mode: "manual" } | { mode: "scheduled"; interval_hours: number },
+  accessGroups: string[] = [],
 ): Promise<Source> {
   const tableConfig: Record<string, unknown> = {
     name: payload.tableName,
@@ -126,7 +124,7 @@ export async function createPostgresSource(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...adminHeaders(),
+      ...authHeaders(),
     },
     body: JSON.stringify({
       name: payload.name,
@@ -140,6 +138,7 @@ export async function createPostgresSource(
         tables: [tableConfig],
       },
       enabled: true,
+      access_groups: accessGroups,
       schedule,
     }),
   });
@@ -161,6 +160,7 @@ export async function createSQLiteSource(
     limit?: number;
   },
   schedule: { mode: "manual" } | { mode: "scheduled"; interval_hours: number },
+  accessGroups: string[] = [],
 ): Promise<Source> {
   const tableConfig: Record<string, unknown> = {
     name: payload.tableName,
@@ -175,7 +175,7 @@ export async function createSQLiteSource(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...adminHeaders(),
+      ...authHeaders(),
     },
     body: JSON.stringify({
       name: payload.name,
@@ -185,6 +185,7 @@ export async function createSQLiteSource(
         tables: [tableConfig],
       },
       enabled: true,
+      access_groups: accessGroups,
       schedule,
     }),
   });
@@ -197,7 +198,7 @@ export async function createSQLiteSource(
 export async function testSource(sourceId: string): Promise<SourceTestResponse> {
   const response = await fetch(`${API_BASE_URL}/sources/${sourceId}/test`, {
     method: "POST",
-    headers: adminHeaders(),
+    headers: authHeaders(),
   });
 
   await ensureOk(response);
@@ -210,7 +211,7 @@ export async function updateSource(sourceId: string, payload: Partial<Pick<Sourc
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
-      ...adminHeaders(),
+      ...authHeaders(),
     },
     body: JSON.stringify(payload),
   });
@@ -225,7 +226,7 @@ export async function runIndexing(sourceId: string): Promise<IndexingJob> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...adminHeaders(),
+      ...authHeaders(),
     },
     body: JSON.stringify({ source_id: sourceId, mode: "full" }),
   });
@@ -237,7 +238,7 @@ export async function runIndexing(sourceId: string): Promise<IndexingJob> {
 
 export async function listIndexingJobs(): Promise<IndexingJob[]> {
   const response = await fetch(`${API_BASE_URL}/indexing/jobs`, {
-    headers: adminHeaders(),
+    headers: authHeaders(),
   });
 
   await ensureOk(response);
@@ -248,7 +249,7 @@ export async function listIndexingJobs(): Promise<IndexingJob[]> {
 export async function deleteSource(sourceId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/sources/${sourceId}`, {
     method: "DELETE",
-    headers: adminHeaders(),
+    headers: authHeaders(),
   });
 
   await ensureOk(response);
@@ -256,14 +257,16 @@ export async function deleteSource(sourceId: string): Promise<void> {
 
 export async function listAuditEvents(): Promise<AuditEvent[]> {
   const response = await fetch(`${API_BASE_URL}/audit?limit=5`, {
-    headers: adminHeaders(),
+    headers: authHeaders(),
   });
   await ensureOk(response);
   return response.json() as Promise<AuditEvent[]>;
 }
 
 export async function getMetrics(): Promise<MetricsSnapshot> {
-  const response = await fetch(`${API_BASE_URL}/metrics`);
+  const response = await fetch(`${API_BASE_URL}/metrics`, {
+    headers: authHeaders(),
+  });
   await ensureOk(response);
   return response.json() as Promise<MetricsSnapshot>;
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from wiki_ai_rag_api.services.evidence import EvidenceService
+from wiki_ai_rag_api.services.access import AccessContext, SYSTEM_ACCESS_CONTEXT
 from wiki_ai_rag_api.services.retrieval import RetrievedChunk, RetrievalService
 from wiki_ai_rag_api.services.sources import SourceService
 
@@ -31,8 +32,14 @@ class KnowledgeToolRegistry:
         query: str,
         top_k: int,
         source_ids: list[str] | None = None,
+        access_context: AccessContext = SYSTEM_ACCESS_CONTEXT,
     ) -> tuple[list[RetrievedChunk], ToolCall]:
-        chunks = await self.retrieval.search(query=query, top_k=top_k, source_ids=source_ids)
+        chunks = await self.retrieval.search(
+            query=query,
+            top_k=top_k,
+            source_ids=source_ids,
+            access_context=access_context,
+        )
         return chunks, ToolCall(
             name="search_knowledge_base",
             status="success",

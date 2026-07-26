@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid5
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,26 @@ def chunk_document(
     metadata = dict(metadata)
     chunks: list[TextChunk] = []
     chunk_texts = list(_split_text(normalized, max_chars=max_chars, overlap_chars=overlap_chars))
-    chunk_ids = [f"chk_{uuid4().hex[:16]}" for _ in chunk_texts]
+    metadata_identity = json.dumps(
+        {
+            key: metadata.get(key)
+            for key in ("section", "page", "record_id", "timestamp")
+            if metadata.get(key) is not None
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    chunk_ids = [
+        "chk_"
+        + uuid5(
+            NAMESPACE_URL,
+            (
+                f"{source_id}:{document_id}:{metadata_identity}:{index}:"
+                f"{hashlib.sha256(chunk_text.encode('utf-8')).hexdigest()}"
+            ),
+        ).hex[:16]
+        for index, chunk_text in enumerate(chunk_texts)
+    ]
     for index, chunk_text in enumerate(chunk_texts):
         content_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
         chunk_metadata = {

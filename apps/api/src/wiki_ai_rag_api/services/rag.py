@@ -4,8 +4,9 @@ import logging
 from wiki_ai_rag_api.core.config import get_settings
 from wiki_ai_rag_api.core.logging import log_event
 from wiki_ai_rag_api.schemas.ask import AskRequest, AskResponse, Citation
+from wiki_ai_rag_api.services.access import AccessContext, SYSTEM_ACCESS_CONTEXT
 from wiki_ai_rag_api.services.conversation import conversation_memory
-from wiki_ai_rag_api.services.llm import GroundedContext, LlmService
+from wiki_ai_rag_api.services.llm import GroundedContext, LlmService, extract_citation_ids
 from wiki_ai_rag_api.services.metrics import metrics_registry
 from wiki_ai_rag_api.services.policy import INSUFFICIENT_CONTEXT_MESSAGE
 from wiki_ai_rag_api.services.retrieval import RetrievedChunk, RetrievalService
@@ -22,12 +23,21 @@ class RagService:
         self.retrieval = retrieval or RetrievalService()
         self.llm = llm or LlmService()
 
-    async def answer(self, request: AskRequest) -> AskResponse:
+    async def answer(
+        self,
+        request: AskRequest,
+        access_context: AccessContext = SYSTEM_ACCESS_CONTEXT,
+    ) -> AskResponse:
         settings = get_settings()
+        memory_session_id = (
+            f"{access_context.subject}:{request.session_id}"
+            if request.session_id
+            else None
+        )
         retrieval_question = request.question
         if settings.conversation_memory_enabled:
             retrieval_question = conversation_memory.build_retrieval_query(
-                session_id=request.session_id,
+                session_id=memory_session_id,
                 question=request.question,
                 max_turns=settings.conversation_memory_max_turns,
             )
@@ -42,6 +52,7 @@ class RagService:
                 query=retrieval_question,
                 top_k=request.top_k,
                 source_ids=request.source_ids,
+                access_context=access_context,
             )
         log_event(
             logger,
@@ -76,11 +87,11 @@ class RagService:
                     GroundedContext(
                         citation_id=citation.id,
                         title=citation.title,
-                        quote=citation.quote,
+                        quote=chunk.text,
                         source_id=citation.source_id,
                         url=citation.url,
                     )
-                    for citation in citations
+                    for citation, chunk in zip(citations, chunks)
                 ],
             )
         if answer == INSUFFICIENT_CONTEXT_MESSAGE:
@@ -98,10 +109,12 @@ class RagService:
                 insufficient_context_reason="llm_refused_context",
             )
 
+        cited_ids = extract_citation_ids(answer)
+        citations = [citation for citation in citations if citation.id in cited_ids]
         metrics_registry.increment("ask.answered")
         if settings.conversation_memory_enabled:
             conversation_memory.record_turn(
-                session_id=request.session_id,
+                session_id=memory_session_id,
                 question=request.question,
                 answer=answer,
                 max_turns=settings.conversation_memory_max_turns,
@@ -129,7 +142,8 @@ def _citation_from_chunk(index: int, chunk: RetrievedChunk) -> Citation:
         source_id=chunk.source_id,
         title=chunk.title,
         section=chunk.metadata.get("section"),
-        url=chunk.metadata.get("url") or chunk.metadata.get("path"),
+        page=chunk.metadata.get("page"),
+        url=chunk.metadata.get("url") or chunk.metadata.get("relative_path"),
         quote=_short_quote(chunk.text),
         timestamp=chunk.metadata.get("timestamp"),
         score=round(chunk.score, 4),

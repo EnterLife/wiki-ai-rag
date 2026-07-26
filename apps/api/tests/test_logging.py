@@ -11,7 +11,13 @@ from wiki_ai_rag_api.services.rag import RagService
 
 
 class EmptyRetrieval:
-    async def search(self, query: str, top_k: int, source_ids: list[str] | None = None) -> list:
+    async def search(
+        self,
+        query: str,
+        top_k: int,
+        source_ids: list[str] | None = None,
+        access_context=None,
+    ) -> list:
         return []
 
 

@@ -3,30 +3,41 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from wiki_ai_rag_api.core.config import get_settings
 from wiki_ai_rag_api.connectors.filesystem import FilesystemConnector
 from wiki_ai_rag_api.connectors.postgres import PostgresConnector
 from wiki_ai_rag_api.connectors.sqlite import SQLiteConnector
 from wiki_ai_rag_api.schemas.sources import SourceCreate, SourceRead, SourceTestResponse, SourceUpdate
+from wiki_ai_rag_api.services.access import AccessContext, SYSTEM_ACCESS_CONTEXT
 from wiki_ai_rag_api.services.audit import AuditService
 from wiki_ai_rag_api.services.secrets import decrypt_config, encrypt_config
 from wiki_ai_rag_api.services.vector_store import VectorStore, get_vector_store
-from wiki_ai_rag_api.storage.json_store import JsonStore
+from wiki_ai_rag_api.storage.base import MetadataStore
+from wiki_ai_rag_api.storage.factory import get_metadata_store
 
 
 class SourceService:
     def __init__(
         self,
-        store: JsonStore | None = None,
+        store: MetadataStore | None = None,
         vector_store: VectorStore | None = None,
         audit: AuditService | None = None,
     ) -> None:
-        self.store = store or JsonStore(get_settings().storage_path)
+        self.store = store or get_metadata_store()
         self.vector_store = vector_store
         self.audit = audit or AuditService(self.store)
 
-    def list_sources(self) -> list[SourceRead]:
-        return [self._to_read_model(source) for source in self.store.list_sources()]
+    def list_sources(
+        self,
+        access_context: AccessContext = SYSTEM_ACCESS_CONTEXT,
+        *,
+        include_disabled: bool = True,
+    ) -> list[SourceRead]:
+        return [
+            self._to_read_model(source)
+            for source in self.store.list_sources()
+            if (include_disabled or source.get("enabled", True))
+            and access_context.can_access_source(source)
+        ]
 
     def create_source(self, payload: SourceCreate) -> SourceRead:
         now = datetime.now(UTC).isoformat()
@@ -36,6 +47,7 @@ class SourceService:
             "type": payload.type,
             "config": encrypt_config(payload.config),
             "enabled": payload.enabled,
+            "access_groups": sorted(set(payload.access_groups)),
             "schedule": payload.schedule.model_dump(),
             "document_count": 0,
             "last_indexed_at": None,
@@ -54,7 +66,9 @@ class SourceService:
     def update_source(self, source_id: str, payload: SourceUpdate) -> SourceRead | None:
         updates = payload.model_dump(exclude_unset=True)
         if "schedule" in updates and updates["schedule"] is not None:
-            updates["schedule"] = payload.schedule.model_dump()
+            schedule = payload.schedule
+            if schedule is not None:
+                updates["schedule"] = schedule.model_dump()
         if not updates:
             source = self.store.get_source(source_id)
             return self._to_read_model(source) if source else None
@@ -79,8 +93,11 @@ class SourceService:
 
         if source["type"] == "filesystem":
             config = decrypt_config(source["config"])
-            connector = FilesystemConnector(source_id=source_id, root_path=config.get("path", ""))
-            ok = await connector.test_connection()
+            filesystem_connector = FilesystemConnector(
+                source_id=source_id,
+                root_path=config.get("path", ""),
+            )
+            ok = await filesystem_connector.test_connection()
             message = "Connection ok" if ok else "Filesystem path is unavailable"
             self.audit.record(
                 action="source.test",
@@ -92,8 +109,11 @@ class SourceService:
             return SourceTestResponse(source_id=source_id, ok=ok, message=message)
 
         if source["type"] == "postgresql":
-            connector = PostgresConnector(source_id=source_id, config=decrypt_config(source["config"]))
-            ok = await connector.test_connection()
+            postgres_connector = PostgresConnector(
+                source_id=source_id,
+                config=decrypt_config(source["config"]),
+            )
+            ok = await postgres_connector.test_connection()
             message = "Connection ok" if ok else "PostgreSQL connection is unavailable"
             self.audit.record(
                 action="source.test",
@@ -105,8 +125,11 @@ class SourceService:
             return SourceTestResponse(source_id=source_id, ok=ok, message=message)
 
         if source["type"] == "sqlite":
-            connector = SQLiteConnector(source_id=source_id, config=decrypt_config(source["config"]))
-            ok = await connector.test_connection()
+            sqlite_connector = SQLiteConnector(
+                source_id=source_id,
+                config=decrypt_config(source["config"]),
+            )
+            ok = await sqlite_connector.test_connection()
             message = "Connection ok" if ok else "SQLite database is unavailable"
             self.audit.record(
                 action="source.test",
@@ -153,6 +176,7 @@ class SourceService:
             name=source["name"],
             type=source["type"],
             enabled=source["enabled"],
+            access_groups=source.get("access_groups", []),
             document_count=source.get("document_count", 0),
             last_indexed_at=source.get("last_indexed_at"),
         )

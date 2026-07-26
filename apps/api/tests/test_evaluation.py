@@ -2,6 +2,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from wiki_ai_rag_api.schemas.evaluation import RetrievalEvaluationItem
+from wiki_ai_rag_api.services.evaluation import _ndcg_at_k, _recall_at_k
+from wiki_ai_rag_api.services.retrieval import RetrievedChunk
+
 
 def test_retrieval_evaluation_reports_recall_and_mrr(
     client: TestClient,
@@ -72,3 +76,25 @@ def test_retrieval_evaluation_reports_missing_expected_document(client: TestClie
     assert payload["metrics"]["recall_at_5"] == 0
     assert payload["metrics"]["mrr"] == 0
     assert payload["results"][0]["found"] is False
+
+
+def test_retrieval_metrics_count_each_expected_document_once() -> None:
+    item = RetrievalEvaluationItem(
+        question="Question",
+        expected_document_ids=["doc-a", "doc-b"],
+    )
+    chunks = [
+        RetrievedChunk(
+            chunk_id=f"chunk-{index}",
+            document_id="doc-a",
+            text="text",
+            source_id="source",
+            title="title",
+            score=1,
+            metadata={},
+        )
+        for index in range(3)
+    ]
+
+    assert _recall_at_k(item, chunks, 5) == 0.5
+    assert 0 <= _ndcg_at_k(item, chunks, 10) <= 1

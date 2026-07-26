@@ -11,6 +11,7 @@ from wiki_ai_rag_api.services.conversation import reset_conversation_memory
 from wiki_ai_rag_api.services.embeddings import get_embedding_provider
 from wiki_ai_rag_api.services.metrics import metrics_registry
 from wiki_ai_rag_api.services.vector_store import get_vector_store
+from wiki_ai_rag_api.storage.factory import get_metadata_store
 
 
 @pytest.fixture()
@@ -19,6 +20,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     get_settings.cache_clear()
     get_embedding_provider.cache_clear()
     get_vector_store.cache_clear()
+    get_metadata_store.cache_clear()
     reset_rate_limiter()
     reset_conversation_memory()
     metrics_registry.reset()
@@ -29,6 +31,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     get_settings.cache_clear()
     get_embedding_provider.cache_clear()
     get_vector_store.cache_clear()
+    get_metadata_store.cache_clear()
     reset_rate_limiter()
     reset_conversation_memory()
     metrics_registry.reset()

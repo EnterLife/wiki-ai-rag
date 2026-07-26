@@ -1,8 +1,11 @@
+import json
+
+import httpx
 import pytest
 
 from wiki_ai_rag_api.core.config import get_settings
 from wiki_ai_rag_api.services.embeddings import get_embedding_provider
-from wiki_ai_rag_api.services.reranking import KeywordReranker, get_reranker
+from wiki_ai_rag_api.services.reranking import HttpReranker, KeywordReranker, get_reranker
 from wiki_ai_rag_api.services.retrieval import RetrievalService
 from wiki_ai_rag_api.services.vector_store import VectorSearchResult
 
@@ -22,6 +25,7 @@ class CapturingVectorStore:
                 text="General unrelated text.",
                 metadata={"retrieval": {"combined_score": 0.9}},
                 score=0.9,
+                vector_score=0.9,
                 combined_score=0.9,
             ),
             VectorSearchResult(
@@ -32,6 +36,7 @@ class CapturingVectorStore:
                 text="OpenVPN routing setup guide.",
                 metadata={"retrieval": {"combined_score": 0.2}},
                 score=0.2,
+                vector_score=0.2,
                 combined_score=0.2,
             ),
         ]
@@ -46,6 +51,11 @@ class CapturingVectorStore:
         raise NotImplementedError
 
 
+class AllowingMetadataStore:
+    def list_sources(self):
+        return [{"id": "src", "enabled": True, "access_groups": []}]
+
+
 def test_keyword_reranker_promotes_keyword_match() -> None:
     reranked = KeywordReranker().rerank(
         query="OpenVPN routing",
@@ -55,6 +65,39 @@ def test_keyword_reranker_promotes_keyword_match() -> None:
 
     assert reranked[0].chunk_id == "chk_vpn"
     assert reranked[0].metadata["retrieval"]["rerank_score"] == 1
+
+
+def test_http_reranker_uses_provider_result_order() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["query"] == "OpenVPN routing"
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"index": 1, "relevance_score": 0.95},
+                    {"index": 0, "relevance_score": 0.2},
+                ]
+            },
+        )
+
+    reranker = HttpReranker(
+        base_url="http://reranker.test",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    results = reranker.rerank(
+        query="OpenVPN routing",
+        candidates=CapturingVectorStore().search(
+            query="",
+            query_embedding=[],
+            top_k=2,
+        ),
+        top_k=2,
+    )
+
+    assert [result.chunk_id for result in results] == ["chk_vpn", "chk_noise"]
+    assert results[0].score == 0.95
 
 
 @pytest.mark.asyncio
@@ -69,7 +112,10 @@ async def test_retrieval_service_uses_candidate_top_k_when_reranker_enabled(
     vector_store = CapturingVectorStore()
 
     try:
-        results = await RetrievalService(vector_store=vector_store).search(
+        results = await RetrievalService(
+            vector_store=vector_store,
+            metadata_store=AllowingMetadataStore(),
+        ).search(
             query="OpenVPN routing",
             top_k=1,
         )

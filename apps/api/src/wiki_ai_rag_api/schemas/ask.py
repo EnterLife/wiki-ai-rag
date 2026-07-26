@@ -17,6 +17,7 @@ class Citation(BaseModel):
     source_id: str
     title: str
     section: str | None = None
+    page: int | None = None
     url: str | None = None
     quote: str
     timestamp: str | None = None

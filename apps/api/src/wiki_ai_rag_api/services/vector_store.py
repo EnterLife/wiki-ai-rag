@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import math
+from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Protocol
@@ -26,6 +28,9 @@ class VectorSearchResult:
 
 
 class VectorStore(Protocol):
+    def healthcheck(self) -> bool:
+        raise NotImplementedError
+
     def replace_chunks_for_source(self, source_id: str, chunks: list[dict]) -> None:
         raise NotImplementedError
 
@@ -45,6 +50,9 @@ class VectorStore(Protocol):
     def get_chunk(self, chunk_id: str) -> VectorSearchResult | None:
         raise NotImplementedError
 
+    def list_chunk_records_for_source(self, source_id: str) -> list[dict]:
+        raise NotImplementedError
+
 
 class JsonVectorStore:
     def __init__(
@@ -56,6 +64,10 @@ class JsonVectorStore:
         self.store = store
         self.vector_weight = vector_weight
         self.keyword_weight = keyword_weight
+
+    def healthcheck(self) -> bool:
+        self.store.list_chunks()
+        return True
 
     def replace_chunks_for_source(self, source_id: str, chunks: list[dict]) -> None:
         self.store.replace_chunks_for_source(source_id, chunks)
@@ -76,44 +88,42 @@ class JsonVectorStore:
             return []
 
         allowed_sources = set(source_ids or [])
-        results: list[VectorSearchResult] = []
-        for chunk in self.store.list_chunks():
+        chunks = [
+            chunk
+            for chunk in self.store.list_chunks()
+            if not allowed_sources or chunk["source_id"] in allowed_sources
+        ]
+        keyword_scores = _bm25_scores(query_terms, chunks)
+        vector_candidates: list[VectorSearchResult] = []
+        keyword_candidates: list[VectorSearchResult] = []
+        for chunk, keyword_score in zip(chunks, keyword_scores):
             if allowed_sources and chunk["source_id"] not in allowed_sources:
                 continue
 
-            keyword_score = _keyword_score(query_terms, chunk["text"], chunk["title"])
             vector_score = cosine_similarity(query_embedding, chunk.get("embedding", []))
-            score = _combined_score(
+            result = VectorSearchResult(
+                chunk_id=chunk["chunk_id"],
+                document_id=chunk["document_id"],
+                source_id=chunk["source_id"],
+                title=chunk["title"],
+                text=chunk["text"],
+                metadata=chunk.get("metadata", {}),
+                score=0.0,
                 vector_score=vector_score,
                 keyword_score=keyword_score,
-                vector_weight=self.vector_weight,
-                keyword_weight=self.keyword_weight,
             )
-            if score <= 0:
-                continue
+            if vector_score > 0:
+                vector_candidates.append(result)
+            if keyword_score > 0:
+                keyword_candidates.append(result)
 
-            metadata = _with_retrieval_metadata(
-                chunk.get("metadata", {}),
-                vector_score=vector_score,
-                keyword_score=keyword_score,
-                combined_score=score,
-            )
-            results.append(
-                VectorSearchResult(
-                    chunk_id=chunk["chunk_id"],
-                    document_id=chunk["document_id"],
-                    source_id=chunk["source_id"],
-                    title=chunk["title"],
-                    text=chunk["text"],
-                    metadata=metadata,
-                    score=score,
-                    vector_score=vector_score,
-                    keyword_score=keyword_score,
-                    combined_score=score,
-                )
-            )
-
-        return sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
+        return _fuse_rankings(
+            vector_candidates=vector_candidates,
+            keyword_candidates=keyword_candidates,
+            vector_weight=self.vector_weight,
+            keyword_weight=self.keyword_weight,
+            top_k=top_k,
+        )
 
     def get_chunk(self, chunk_id: str) -> VectorSearchResult | None:
         for chunk in self.store.list_chunks():
@@ -133,6 +143,13 @@ class JsonVectorStore:
             )
         return None
 
+    def list_chunk_records_for_source(self, source_id: str) -> list[dict]:
+        return [
+            chunk
+            for chunk in self.store.list_chunks()
+            if chunk["source_id"] == source_id
+        ]
+
 
 class QdrantVectorStore:
     def __init__(
@@ -144,6 +161,7 @@ class QdrantVectorStore:
         vector_weight: float = 0.65,
         keyword_weight: float = 0.35,
         keyword_candidate_limit: int = 200,
+        use_alias: bool = False,
     ) -> None:
         from qdrant_client import QdrantClient
 
@@ -153,14 +171,21 @@ class QdrantVectorStore:
         self.vector_weight = vector_weight
         self.keyword_weight = keyword_weight
         self.keyword_candidate_limit = keyword_candidate_limit
+        self.use_alias = use_alias
+
+    def healthcheck(self) -> bool:
+        self.client.get_collections()
+        return True
 
     def replace_chunks_for_source(self, source_id: str, chunks: list[dict]) -> None:
         self._ensure_collection()
-        self.delete_chunks_for_source(source_id)
-        if not chunks:
-            return
+        from qdrant_client.models import PointIdsList, PointStruct
 
-        from qdrant_client.models import PointStruct
+        existing_ids = self._point_ids_for_source(source_id)
+        next_ids = {
+            str(uuid5(NAMESPACE_URL, chunk["chunk_id"]))
+            for chunk in chunks
+        }
 
         points = [
             PointStruct(
@@ -170,7 +195,16 @@ class QdrantVectorStore:
             )
             for chunk in chunks
         ]
-        self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
+        if points:
+            self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
+
+        stale_ids = existing_ids - next_ids
+        if stale_ids:
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=PointIdsList(points=sorted(stale_ids)),
+                wait=True,
+            )
 
     def delete_chunks_for_source(self, source_id: str) -> None:
         self._ensure_collection()
@@ -215,45 +249,27 @@ class QdrantVectorStore:
                 with_payload=True,
             ),
         )
-        candidates: dict[str, VectorSearchResult] = {}
         query_terms = _tokenize(query)
+        vector_candidates: list[VectorSearchResult] = []
 
-        for point in response.result:
+        for point in response.result or []:
             if not point.payload:
                 continue
             result = self._point_to_result(point)
-            keyword_score = _keyword_score(query_terms, result.text, result.title)
-            score = _combined_score(
-                vector_score=result.vector_score,
-                keyword_score=keyword_score,
-                vector_weight=self.vector_weight,
-                keyword_weight=self.keyword_weight,
-            )
-            candidates[result.chunk_id] = _replace_scores(
-                result,
-                vector_score=result.vector_score,
-                keyword_score=keyword_score,
-                combined_score=score,
-            )
+            if result.vector_score > 0:
+                vector_candidates.append(result)
 
-        for result in self._keyword_candidates(query_terms=query_terms, source_ids=source_ids):
-            existing = candidates.get(result.chunk_id)
-            vector_score = existing.vector_score if existing else 0.0
-            keyword_score = result.keyword_score
-            score = _combined_score(
-                vector_score=vector_score,
-                keyword_score=keyword_score,
-                vector_weight=self.vector_weight,
-                keyword_weight=self.keyword_weight,
-            )
-            candidates[result.chunk_id] = _replace_scores(
-                result,
-                vector_score=vector_score,
-                keyword_score=keyword_score,
-                combined_score=score,
-            )
-
-        return sorted(candidates.values(), key=lambda result: result.score, reverse=True)[:top_k]
+        keyword_candidates = self._keyword_candidates(
+            query_terms=query_terms,
+            source_ids=source_ids,
+        )
+        return _fuse_rankings(
+            vector_candidates=vector_candidates,
+            keyword_candidates=keyword_candidates,
+            vector_weight=self.vector_weight,
+            keyword_weight=self.keyword_weight,
+            top_k=top_k,
+        )
 
     def get_chunk(self, chunk_id: str) -> VectorSearchResult | None:
         self._ensure_collection()
@@ -266,6 +282,8 @@ class QdrantVectorStore:
             return None
         point = points[0]
         payload = point.payload
+        if payload is None:
+            return None
         return VectorSearchResult(
             chunk_id=payload["chunk_id"],
             document_id=payload["document_id"],
@@ -278,6 +296,49 @@ class QdrantVectorStore:
             keyword_score=0.0,
             combined_score=1.0,
         )
+
+    def list_chunk_records_for_source(self, source_id: str) -> list[dict]:
+        records: list[dict] = []
+        for point in self._scroll_source_points(source_id, with_vectors=True):
+            if not point.payload:
+                continue
+            vector = point.vector
+            if isinstance(vector, dict):
+                vector = next(iter(vector.values()), [])
+            records.append({**point.payload, "embedding": list(vector or [])})
+        return records
+
+    def _point_ids_for_source(self, source_id: str) -> set[str]:
+        return {
+            str(point.id)
+            for point in self._scroll_source_points(source_id, with_vectors=False)
+        }
+
+    def _scroll_source_points(self, source_id: str, *, with_vectors: bool) -> list:
+        self._ensure_collection()
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        points: list = []
+        offset = None
+        while True:
+            page, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="source_id",
+                            match=MatchValue(value=source_id),
+                        )
+                    ]
+                ),
+                limit=self.keyword_candidate_limit,
+                offset=offset,
+                with_payload=True,
+                with_vectors=with_vectors,
+            )
+            points.extend(page)
+            if offset is None:
+                return points
 
     def _keyword_candidates(
         self,
@@ -300,22 +361,28 @@ class QdrantVectorStore:
                     )
                 ]
             )
-        points, _ = self.client.scroll(
-            collection_name=self.collection_name,
-            scroll_filter=scroll_filter,
-            limit=self.keyword_candidate_limit,
-            with_payload=PayloadSelectorInclude(
-                include=["chunk_id", "document_id", "source_id", "title", "text", "metadata"]
-            ),
-            with_vectors=False,
-        )
+        points: list = []
+        offset = None
+        while True:
+            page, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=scroll_filter,
+                limit=self.keyword_candidate_limit,
+                offset=offset,
+                with_payload=PayloadSelectorInclude(
+                    include=["chunk_id", "document_id", "source_id", "title", "text", "metadata"]
+                ),
+                with_vectors=False,
+            )
+            points.extend(page)
+            if offset is None:
+                break
 
+        payloads = [point.payload for point in points if point.payload]
+        keyword_scores = _bm25_scores(query_terms, payloads)
         results: list[VectorSearchResult] = []
-        for point in points:
-            if not point.payload:
-                continue
-            result = self._payload_to_result(point.payload, score=0.0)
-            keyword_score = _keyword_score(query_terms, result.text, result.title)
+        for payload, keyword_score in zip(payloads, keyword_scores):
+            result = self._payload_to_result(payload, score=0.0)
             if keyword_score <= 0:
                 continue
             results.append(
@@ -323,15 +390,46 @@ class QdrantVectorStore:
                     result,
                     vector_score=0.0,
                     keyword_score=keyword_score,
-                    combined_score=keyword_score * self.keyword_weight,
+                    combined_score=0.0,
                 )
             )
         return results
 
     def _ensure_collection(self) -> None:
-        from qdrant_client.models import Distance, VectorParams
+        from qdrant_client.models import (
+            CreateAlias,
+            CreateAliasOperation,
+            Distance,
+            VectorParams,
+        )
 
         collections = self.client.get_collections().collections
+        if self.use_alias:
+            aliases = self.client.get_aliases().aliases
+            if any(alias.alias_name == self.collection_name for alias in aliases):
+                return
+            if any(collection.name == self.collection_name for collection in collections):
+                raise RuntimeError(
+                    f"Qdrant collection '{self.collection_name}' conflicts with the logical "
+                    "alias name; configure QDRANT_COLLECTION to a new alias before migration"
+                )
+            physical_name = f"{self.collection_name}_v1"
+            if not any(collection.name == physical_name for collection in collections):
+                self.client.create_collection(
+                    collection_name=physical_name,
+                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
+                )
+            self.client.update_collection_aliases(
+                [
+                    CreateAliasOperation(
+                        create_alias=CreateAlias(
+                            collection_name=physical_name,
+                            alias_name=self.collection_name,
+                        )
+                    )
+                ]
+            )
+            return
         if any(collection.name == self.collection_name for collection in collections):
             return
 
@@ -339,6 +437,10 @@ class QdrantVectorStore:
             collection_name=self.collection_name,
             vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
         )
+
+    def ensure_collection(self) -> None:
+        """Create the physical collection and alias when they do not exist."""
+        self._ensure_collection()
 
     @staticmethod
     def _source_filter(source_ids: list[str] | None):
@@ -395,6 +497,7 @@ def get_vector_store() -> VectorStore:
             vector_weight=settings.retrieval_vector_weight,
             keyword_weight=settings.retrieval_keyword_weight,
             keyword_candidate_limit=settings.retrieval_keyword_candidate_limit,
+            use_alias=settings.qdrant_use_alias,
         )
     raise ValueError(f"Vector store provider '{settings.vector_store_provider}' is not implemented yet")
 
@@ -403,22 +506,94 @@ def _tokenize(text: str) -> set[str]:
     return {term for term in re.findall(r"[\wа-яА-ЯёЁ]+", text.lower()) if len(term) > 2}
 
 
-def _keyword_score(query_terms: set[str], text: str, title: str) -> float:
-    text_terms = _tokenize(f"{title}\n{text}")
-    if not text_terms:
-        return 0
-    matched_terms = query_terms.intersection(text_terms)
-    return len(matched_terms) / len(query_terms)
+def _bm25_scores(query_terms: set[str], chunks: list[dict]) -> list[float]:
+    if not query_terms or not chunks:
+        return [0.0] * len(chunks)
+    documents = [
+        _tokenize_terms(f"{chunk.get('title', '')}\n{chunk.get('text', '')}")
+        for chunk in chunks
+    ]
+    average_length = sum(len(document) for document in documents) / len(documents)
+    document_frequencies = {
+        term: sum(1 for document in documents if term in set(document))
+        for term in query_terms
+    }
+    scores: list[float] = []
+    for document in documents:
+        frequencies = Counter(document)
+        score = 0.0
+        for term in query_terms:
+            frequency = frequencies.get(term, 0)
+            if not frequency:
+                continue
+            document_frequency = document_frequencies[term]
+            inverse_document_frequency = math.log(
+                1 + (len(documents) - document_frequency + 0.5) / (document_frequency + 0.5)
+            )
+            length_normalization = 1 - 0.75 + (
+                0.75 * len(document) / max(1.0, average_length)
+            )
+            score += inverse_document_frequency * (
+                frequency * 2.5 / (frequency + 1.5 * length_normalization)
+            )
+        scores.append(score)
+    max_score = max(scores, default=0.0)
+    if max_score <= 0:
+        return scores
+    return [score / max_score for score in scores]
 
 
-def _combined_score(
+def _fuse_rankings(
     *,
-    vector_score: float,
-    keyword_score: float,
+    vector_candidates: list[VectorSearchResult],
+    keyword_candidates: list[VectorSearchResult],
     vector_weight: float,
     keyword_weight: float,
-) -> float:
-    return (vector_weight * max(0.0, vector_score)) + (keyword_weight * max(0.0, keyword_score))
+    top_k: int,
+) -> list[VectorSearchResult]:
+    vector_candidates = sorted(
+        vector_candidates,
+        key=lambda candidate: candidate.vector_score,
+        reverse=True,
+    )
+    keyword_candidates = sorted(
+        keyword_candidates,
+        key=lambda candidate: candidate.keyword_score,
+        reverse=True,
+    )
+    candidates = {
+        candidate.chunk_id: candidate
+        for candidate in [*vector_candidates, *keyword_candidates]
+    }
+    vector_scores = {
+        candidate.chunk_id: candidate.vector_score
+        for candidate in vector_candidates
+    }
+    keyword_scores = {
+        candidate.chunk_id: candidate.keyword_score
+        for candidate in keyword_candidates
+    }
+    fused_scores: dict[str, float] = {}
+    rrf_k = 60
+    for ranking, weight in (
+        (vector_candidates, vector_weight),
+        (keyword_candidates, keyword_weight),
+    ):
+        for rank, candidate in enumerate(ranking, start=1):
+            fused_scores[candidate.chunk_id] = fused_scores.get(candidate.chunk_id, 0.0) + (
+                weight * (rrf_k + 1) / (rrf_k + rank)
+            )
+
+    results = [
+        _replace_scores(
+            candidate,
+            vector_score=vector_scores.get(chunk_id, 0.0),
+            keyword_score=keyword_scores.get(chunk_id, 0.0),
+            combined_score=min(1.0, fused_scores[chunk_id]),
+        )
+        for chunk_id, candidate in candidates.items()
+    ]
+    return sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
 
 
 def _with_retrieval_metadata(
@@ -462,3 +637,7 @@ def _replace_scores(
         keyword_score=keyword_score,
         combined_score=combined_score,
     )
+
+
+def _tokenize_terms(text: str) -> list[str]:
+    return [term for term in re.findall(r"[\wа-яА-ЯёЁ]+", text.lower()) if len(term) > 2]
